@@ -1,0 +1,6 @@
+[submodule "lib/KJH_SVG"]
+	path = lib/KJH_SVG
+	url = https://github.com/kimzz14/KJH_SVG.git
+[submodule "lib/JobTimer"]
+	path = lib/JobTimer
+	url = https://github.com/kimzz14/JobTimer.git
