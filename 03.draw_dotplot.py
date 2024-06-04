@@ -409,7 +409,7 @@ for contig in engine.run():
     dotplot.set_position(strand, intercept)
     dotplot.set_border(1, qsize, rsPos, rePos)
 
-    for strand, sub_DICT in fContig.block_DICT[rname].items():
+    for _strand, sub_DICT in fContig.block_DICT[rname].items():
         for _intercept, block_LIST in sub_DICT.items():
             for block in block_LIST:
                 dotplot.add_block(block)
@@ -422,7 +422,7 @@ for contig in engine.run():
     dotplotLow.set_position(strand, intercept)
     dotplotLow.set_border(1, qsize, rsPos, rePos)
 
-    for strand, sub_DICT in fContig.block_DICT[rname].items():
+    for _strand, sub_DICT in fContig.block_DICT[rname].items():
         for _intercept, block_LIST in sub_DICT.items():
             for blockIDX, block in enumerate(block_LIST):
                 if blockIDX%10 == 0:
