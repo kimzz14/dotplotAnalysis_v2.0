@@ -435,8 +435,7 @@ for contig in engine.run():
     fout.flush()
     print("Process... [{0:6.2f}%] remainTime: {1}  ----   {2:>10}{3:>20}{4:>20.5f}{5:>20.5f}{6:>20}".format(percentage*100, jobTimer.remainTime(percentage), qname, rname, std_deviation, coverage, number))
 
-    #print("{0:>20}    {1:>20}    {2:>20.5f}    {3:>20.5f}    {4:>20}     {5:>20.5f}     {6:>20.5f}       {7:>20.5f}".format(qname, rname, std_deviation, coverage, number, float(number*71)/(qePos - qsPos), float(number*71)/(qsize), float(number*71)/(rsize)))
-
+fout.close()
 for rname, image in image_DICT.items():
     fout = open('dotplot/{0}.html'.format(rname), 'w')
     fout.write(str(image.html))
