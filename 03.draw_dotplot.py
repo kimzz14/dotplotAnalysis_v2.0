@@ -377,14 +377,17 @@ rFAR = FAIDX_READER('ref/ref.fa.fai')
 engine = Engine(prefix)
 
 image_DICT = {}
+imageLow_DICT = {}
+
 jobTimer.reset()
 processedN = 0
-for contig in engine.run():
-    rContig = contig.removeRepeat(20)
-    
-    fContig = rContig.extract(5)
 
-    #print(len(contig.block_LIST), len(rContig.block_LIST), len(fContig.block_LIST))
+fout = open(prefix + '.contig', 'w')
+for contig in engine.run():
+    rContig = contig.removeRepeat(5)
+    fContig = rContig.extract(10)
+
+    print(len(contig.block_LIST), len(rContig.block_LIST), len(fContig.block_LIST))
 
     qname = contig.qname
     rname = fContig.get_most()
@@ -398,19 +401,38 @@ for contig in engine.run():
     if not rname in image_DICT: 
         image_DICT[rname] = IMAGE(rname, rFAR.get(rname))
 
-    dotplot = image_DICT[rname].set(qname, qsize)
+    #High Resolution
+    if not rname in image_DICT: 
+        image_DICT[rname] = IMAGE(rname, rFAR.get(rname))
 
+    dotplot = image_DICT[rname].set(qname, qsize)
     dotplot.set_position(strand, intercept)
     dotplot.set_border(1, qsize, rsPos, rePos)
 
-    for strand, sub_DICT in contig.block_DICT[rname].items():
+    for strand, sub_DICT in fContig.block_DICT[rname].items():
         for _intercept, block_LIST in sub_DICT.items():
             for block in block_LIST:
                 dotplot.add_block(block)
+    
+    #Low Resolution
+    if not rname in imageLow_DICT: 
+        imageLow_DICT[rname] = IMAGE(rname, rFAR.get(rname))
+        
+    dotplotLow = imageLow_DICT[rname].set(qname, qsize)
+    dotplotLow.set_position(strand, intercept)
+    dotplotLow.set_border(1, qsize, rsPos, rePos)
+
+    for strand, sub_DICT in fContig.block_DICT[rname].items():
+        for _intercept, block_LIST in sub_DICT.items():
+            for blockIDX, block in enumerate(block_LIST):
+                if blockIDX%10 == 0:
+                    dotplotLow.add_block(block)
 
     processedN += qsize
     jobTimer.check()
     percentage = float(processedN)/qFAR.totalN
+    fout.write('\t'.join(map(str,[qname, rname, strand, intercept, number, variance, std_deviation, qsPos, qePos, rsPos, rePos, coverage])) + '\n')
+    fout.flush()
     print("Process... [{0:6.2f}%] remainTime: {1}  ----   {2:>10}{3:>20}{4:>20.5f}{5:>20.5f}{6:>20}".format(percentage*100, jobTimer.remainTime(percentage), qname, rname, std_deviation, coverage, number))
 
     #print("{0:>20}    {1:>20}    {2:>20.5f}    {3:>20.5f}    {4:>20}     {5:>20.5f}     {6:>20.5f}       {7:>20.5f}".format(qname, rname, std_deviation, coverage, number, float(number*71)/(qePos - qsPos), float(number*71)/(qsize), float(number*71)/(rsize)))
@@ -420,4 +442,7 @@ for rname, image in image_DICT.items():
     fout.write(str(image.html))
     fout.close()
 
-
+for rname, image in imageLow_DICT.items():
+    fout = open('dotplot/{0}_Low.html'.format(rname), 'w')
+    fout.write(str(image.html))
+    fout.close()
