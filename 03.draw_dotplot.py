@@ -228,7 +228,6 @@ class CONTIG:
 class Engine:
     def __init__(self, prefix):
         self.READ_SIZE = 100
-        self.READ_SLIDING = 71
 
         self.fin = open(prefix + '.sam')
     
@@ -238,7 +237,7 @@ class Engine:
             if line.startswith('@PG') == True:
                 break
 
-        for qname, group1 in groupby(self.fin, lambda line: line.split('_')[0]):
+        for qname, group1 in groupby(self.fin, lambda line: line.split('$')[0]):
             #print('----------------------------------------------------------', QNAME)
             contig = CONTIG(qname)
             for key2, group2 in groupby(group1, lambda line: line.split('\t')[0]):

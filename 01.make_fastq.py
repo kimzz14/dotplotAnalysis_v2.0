@@ -30,7 +30,7 @@ for seqName in seqName_LIST:
         ePos = sPos + readLength
         if len(sequence) <= ePos: break
         readSeq = sequence[sPos:ePos]
-        fout.write('@' + seqName + '_' + str(sPos + 1) + '\n')
+        fout.write('@' + seqName + '$' + str(sPos + 1) + '\n')
         fout.write(readSeq + '\n')
         fout.write('+' + '\n')
         fout.write(quality + '\n')
