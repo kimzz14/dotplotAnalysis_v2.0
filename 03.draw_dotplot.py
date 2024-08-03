@@ -242,7 +242,7 @@ class Engine:
             contig = CONTIG(qname)
             for key2, group2 in groupby(group1, lambda line: line.split('\t')[0]):
                 #print('----------------------------------------------------------', key2)
-                qpos = int(key2.split('_')[1])
+                qpos = int(key2.split('$')[1])
 
                 for data in group2:
                     flag, rname, rpos = data.split('\t')[1:4]
