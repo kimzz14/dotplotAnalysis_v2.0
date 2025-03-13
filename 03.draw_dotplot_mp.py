@@ -1,14 +1,10 @@
+from multiprocessing import Pool, shared_memory
+from dataclasses import dataclass, field
 from lib.KJH_SVG.KJH_SVG import element
-from lib.JobTimer.JobTimer import JobTimer
 from itertools import groupby
 from scipy.stats import chi2
 import math
 import numpy as np
-
-###########################################################################################
-def cal_pos(pos):
-    POS_RATE = 0.00003
-    return pos * POS_RATE
 ###########################################################################################
 def chi_squared_test(variance, number):
     sigma0_squared = 200000 * 200000
@@ -49,11 +45,13 @@ class FAIDX_READER:
     def __init__(self, fileName):
         self.fileName = fileName
         self.seqLen_DICT = {}
+        self.seqName_LIST = []
         self.totalN = 0
 
         fin = open(self.fileName)
         for line in fin:
             seqName, seqLen = line.rstrip('\n').split('\t')[0:2]
+            self.seqName_LIST += [seqName]
             seqLen = int(seqLen)
             self.seqLen_DICT[seqName] = seqLen
             self.totalN += seqLen
@@ -62,20 +60,36 @@ class FAIDX_READER:
     def get(self, seqName):
         return self.seqLen_DICT[seqName]
 
+@dataclass
 class BLOCK:
-    def __init__(self, rname, strand, qpos, rpos):
-        self.rname = rname
-        self.strand = strand
-        self.qpos = qpos
-        self.rpos = rpos
+    rname: str
+    strand: str
+    qpos: int
+    rpos: int
+    isIn: bool = field(default=False)
+    isRepeat: bool = field(default=False)
+    intercept: int = field(init=False)
 
-        self.isIn = False
-        self.isRepeat = False
+    def __post_init__(self):
+        if self.strand == '+':
+            self.intercept = -self.qpos + self.rpos
+        elif self.strand == '-':
+            self.intercept = self.qpos + self.rpos
 
-        if strand == '+':
-            self.intercept = -qpos + rpos
-        elif strand == '-':
-            self.intercept =  qpos + rpos
+@dataclass
+class Match:
+    qname: str
+    rname: str
+    strand: str
+    intercept: int
+    number: int
+    variance: float
+    std_deviation: float
+    qsPos: int
+    qePos: int
+    rsPos: int
+    rePos: int
+    coverage: float
 
 class CONTIG:
     def __init__(self, qname):
@@ -83,6 +97,8 @@ class CONTIG:
         self.block_DICT = {}
         self.blockN_DICT = {}
         self.block_LIST = []
+
+        self.bestMatch = None
     
     def add(self, block):
         self.block_LIST += [block]
@@ -155,19 +171,17 @@ class CONTIG:
 
         return _contig
 
-        #self.block_DICT = _contig.block_DICT
-        #self.blockN_DICT = _contig.blockN_DICT
+    def calc_best(self, coverage):
+        bestMatch = None
 
-    def get_most(self):
-        rname = None
-        nubmer = 1
-        for _rname in self.block_DICT.keys():
-            qname, strand, intercept, _number, variance, std_deviation, qsPos, qePos, rsPos, rePos, coverage = self.calc(_rname, 1)
-            if _number > nubmer:
-                nubmer = _number
-                rname = _rname
-        
-        return rname
+        for rname in self.block_DICT.keys():
+            match = self.calc(rname, 1)
+
+            if bestMatch == None or bestMatch.number < match.number:
+                bestMatch = match
+
+        self.bestMatch = bestMatch
+        return self.bestMatch
 
     def calc(self, rname, coverage):
         target_LIST = []
@@ -209,10 +223,11 @@ class CONTIG:
             meanIntercept, variance = median_without_outliers(interceptM_LIST)
             std_deviation = variance ** 0.5
 
+        
         #calculate boundery
         for [strand, intercept, block_LIST] in target_LIST:
             if STRAND != strand: continue
-            if abs(intercept - meanIntercept) >  std_deviation * 3: continue
+            if abs(intercept - meanIntercept) >  max(std_deviation * 3, 1000): continue
             for block in block_LIST:
                 block.isIn = True
 
@@ -223,21 +238,28 @@ class CONTIG:
                 rePos = max(rePos, block.rpos)
 
         number = len(interceptP_LIST) + len(interceptM_LIST)
-        return self.qname, STRAND, meanIntercept, number, variance, std_deviation, qsPos, qePos, rsPos, rePos, float(qePos - qsPos) / (rePos - rsPos)
+
+        return Match(self.qname, rname, STRAND, meanIntercept, number, variance, std_deviation, qsPos, qePos, rsPos, rePos, float(qePos - qsPos) / (rePos - rsPos))
             
 class Engine:
-    def __init__(self, prefix):
-        self.READ_SIZE = 100
+    def __init__(self, prefix, batchN, batchIDX):
+        self.batchN = batchN
+        self.batchIDX = batchIDX
 
         self.fin = open(prefix + '.sam')
     
+    def close(self):
+        self.fin.close()
+    
     def run(self):
-        #skip head
         for line in self.fin:
             if line.startswith('@PG') == True:
                 break
-
+        
+        contigIDX = -1
         for qname, group1 in groupby(self.fin, lambda line: line.split('$')[0]):
+            contigIDX += 1
+            if contigIDX%self.batchN != self.batchIDX: continue
             #print('----------------------------------------------------------', QNAME)
             contig = CONTIG(qname)
             for key2, group2 in groupby(group1, lambda line: line.split('\t')[0]):
@@ -257,20 +279,21 @@ class Engine:
             
             yield contig
 
-
 class IMAGE:
-    def __init__(self, seqName, seqLen):
+    def __init__(self, seqName, seqLen, posRate):
         margin = 100
 
         self.seqName = seqName
         self.seqLen = seqLen
         self.html = element('html', None)
 
+        self.posRate = posRate
+
 
         self.svg = element('svg', self.html)
-        self.svg.attr('viewBox', '0 0 {0} {1}'.format(cal_pos(self.seqLen) + margin * 2, cal_pos(self.seqLen) + margin * 2))
-        self.svg.attr('height', cal_pos(self.seqLen) + margin * 2)
-        self.svg.attr('width',  cal_pos(self.seqLen) + margin * 2)
+        self.svg.attr('viewBox', '0 0 {0} {1}'.format(self.cal_pos(self.seqLen) + margin * 2, self.cal_pos(self.seqLen) + margin * 2))
+        self.svg.attr('height', self.cal_pos(self.seqLen) + margin * 2)
+        self.svg.attr('width',  self.cal_pos(self.seqLen) + margin * 2)
         self.svg.style('background', 'white')
         self.group = element('g', self.svg)
         self.group.attr('transform', 'translate({0},{1}) scale(1)'.format(margin, margin)) #scale(100)
@@ -278,32 +301,36 @@ class IMAGE:
 
         self.dotplot_DICT = {}
 
+    def cal_pos(self, pos):
+        return self.posRate * pos
+
     def set_ruler(self):
         ref_ruler = element('rect', self.group)
         ref_ruler.attr('x', -2)
         ref_ruler.attr('y', 0)
-        ref_ruler.attr('height', cal_pos(self.seqLen))
+        ref_ruler.attr('height', self.cal_pos(self.seqLen))
         ref_ruler.attr('width', 1)
         ref_ruler.attr('fill', 'black')
         query_ruler = element('rect', self.group)
         query_ruler.attr('x', 0)
-        query_ruler.attr('y', cal_pos(self.seqLen))
+        query_ruler.attr('y', self.cal_pos(self.seqLen))
         query_ruler.attr('height', 1)
-        query_ruler.attr('width', cal_pos(self.seqLen))
+        query_ruler.attr('width', self.cal_pos(self.seqLen))
         query_ruler.attr('fill', 'black')
 
     def set(self, seqName, seqLen):
         if not seqName in self.dotplot_DICT:
-            self.dotplot_DICT[seqName] = DOTPLOT(self.group, seqName, seqLen)
+            self.dotplot_DICT[seqName] = DOTPLOT(self.group, seqName, seqLen, self.posRate)
         return self.dotplot_DICT[seqName]
     
     def get(self, seqName):
         return self.dotplot_DICT[seqName]
 
 class DOTPLOT:
-    def __init__(self, container, seqName, seqLen):
+    def __init__(self, container, seqName, seqLen, posRate):
         self.seqName = seqName
         self.seqLen = seqLen
+        self.posRate = posRate
 
         self.group = element('g', container)
         self.text = element('text', self.group)
@@ -312,26 +339,29 @@ class DOTPLOT:
         
         self.strand = '+'
 
+    def cal_pos(self, pos):
+        return self.posRate * pos
+    
     def set_position(self, strand, intercept):
         self.strand = strand
         
-        x = cal_pos(intercept)
+        x = self.cal_pos(intercept)
         y = 0
 
-        if strand == '+':
+        if self.strand == '+':
             self.group.attr('transform', 'translate({0:.3f},{1:.3f}) '.format(x, y))
         else:
             self.group.attr('transform', 'translate({0:.3f},{1:.3f}) scale(-1, 1) '.format(x, y))
     
     def set_border(self, qsPos, qePos, rsPos, rePos):
-        self.text.add('   ' + strand*5)
+        self.text.add('   ' + self.strand*5)
 
         rect = element('rect ', self.group)
         
-        x1 = cal_pos(qsPos)
-        x2 = cal_pos(qePos)
-        y1 = cal_pos(rsPos)
-        y2 = cal_pos(rePos)
+        x1 = self.cal_pos(qsPos)
+        x2 = self.cal_pos(qePos)
+        y1 = self.cal_pos(rsPos)
+        y2 = self.cal_pos(rePos)
 
         rect.attr('x', "{0:.3f}".format(x1))
         rect.attr('y', "{0:.3f}".format(y1))
@@ -341,7 +371,7 @@ class DOTPLOT:
         rect.attr('stroke', 'gray')
         rect.attr('stroke-width', '0.3')
 
-        if strand == '+':
+        if self.strand == '+':
             self.text.attr('x', x1 + 4)
             self.text.attr('y', y1 -  2)
         else:
@@ -354,8 +384,8 @@ class DOTPLOT:
 
         r = 0.05
 
-        cx = cal_pos(block.qpos) - r/2
-        cy = cal_pos(block.rpos) - r/2
+        cx = self.cal_pos(block.qpos) - r/2
+        cy = self.cal_pos(block.rpos) - r/2
  
         dot.attr('cx', "{0:.4f}".format(cx))
         dot.attr('cy', "{0:.4f}".format(cy))
@@ -368,79 +398,143 @@ class DOTPLOT:
 
 
 ###########################################################################################
-jobTimer = JobTimer()
-
 prefix = 'query_100'
 qFAR = FAIDX_READER('query.fa.fai')
 rFAR = FAIDX_READER('ref/ref.fa.fai')
-engine = Engine(prefix)
 
 image_DICT = {}
 imageLow_DICT = {}
 
-jobTimer.reset()
-processedN = 0
+batchN = 20
+###########################################################################################
+def make_contig(batchIDX):
+    result = []
 
+    engine = Engine(prefix, batchN, batchIDX)
+    for contig in engine.run():
+        rContig = contig.removeRepeat(5)
+        del contig
+
+        fContig = rContig.extract(10)
+        del rContig
+
+        fContig.calc_best(1)
+
+        result += [fContig]
+    engine.close()
+
+    return result
+
+with Pool(processes=batchN) as pool:
+    result_LIST = pool.map(make_contig, range(batchN))
+
+###########################################################################################
 fout = open(prefix + '.contig', 'w')
-for contig in engine.run():
-    rContig = contig.removeRepeat(5)
-    fContig = rContig.extract(10)
+contig_DICT = {}
+for contig_LIST in result_LIST:
+    for contig in contig_LIST:
+        if contig.bestMatch == None: continue
 
-    print(len(contig.block_LIST), len(rContig.block_LIST), len(fContig.block_LIST))
+        context  = [contig.bestMatch.qname]
+        context += [contig.bestMatch.rname]
+        context += [contig.bestMatch.strand]
+        context += [contig.bestMatch.intercept]
+        context += [contig.bestMatch.number]
+        context += [contig.bestMatch.variance]
+        context += [contig.bestMatch.std_deviation]
+        context += [contig.bestMatch.qsPos]
+        context += [contig.bestMatch.qePos]
+        context += [contig.bestMatch.rsPos]
+        context += [contig.bestMatch.rePos]
+        context += [contig.bestMatch.coverage]
+        fout.write('\t'.join(map(str,context)) + '\n')
 
-    qname = contig.qname
-    rname = fContig.get_most()
-    if rname == None: continue
+        rname = contig.bestMatch.rname
+        if not rname in contig_DICT: contig_DICT[rname] = []
 
-    rsize = rFAR.get(rname)
-    qsize = qFAR.get(qname)
-
-    qname, strand, intercept, number, variance, std_deviation, qsPos, qePos, rsPos, rePos, coverage = fContig.calc(rname, 1)
-    
-    if not rname in image_DICT: 
-        image_DICT[rname] = IMAGE(rname, rFAR.get(rname))
-
-    #High Resolution
-    if not rname in image_DICT: 
-        image_DICT[rname] = IMAGE(rname, rFAR.get(rname))
-
-    dotplot = image_DICT[rname].set(qname, qsize)
-    dotplot.set_position(strand, intercept)
-    dotplot.set_border(1, qsize, rsPos, rePos)
-
-    for _strand, sub_DICT in fContig.block_DICT[rname].items():
-        for _intercept, block_LIST in sub_DICT.items():
-            for block in block_LIST:
-                dotplot.add_block(block)
-    
-    #Low Resolution
-    if not rname in imageLow_DICT: 
-        imageLow_DICT[rname] = IMAGE(rname, rFAR.get(rname))
-        
-    dotplotLow = imageLow_DICT[rname].set(qname, qsize)
-    dotplotLow.set_position(strand, intercept)
-    dotplotLow.set_border(1, qsize, rsPos, rePos)
-
-    for _strand, sub_DICT in fContig.block_DICT[rname].items():
-        for _intercept, block_LIST in sub_DICT.items():
-            for blockIDX, block in enumerate(block_LIST):
-                if blockIDX%10 == 0:
-                    dotplotLow.add_block(block)
-
-    processedN += qsize
-    jobTimer.check()
-    percentage = float(processedN)/qFAR.totalN
-    fout.write('\t'.join(map(str,[qname, rname, strand, intercept, number, variance, std_deviation, qsPos, qePos, rsPos, rePos, coverage])) + '\n')
-    fout.flush()
-    print("Process... [{0:6.2f}%] remainTime: {1}  ----   {2:>10}{3:>20}{4:>20.5f}{5:>20.5f}{6:>20}".format(percentage*100, jobTimer.remainTime(percentage), qname, rname, std_deviation, coverage, number))
+        contig_DICT[rname] += [contig]
 
 fout.close()
-for rname, image in image_DICT.items():
-    fout = open('dotplot_S/{0}.html'.format(rname), 'w')
+###########################################################################################
+def draw_image(rname):
+    rsize = rFAR.get(rname)
+
+    posRate_S = 0.00001
+    posRate_L = 0.0003
+
+    image = IMAGE(rname, rsize, posRate_S)
+    for contig in contig_DICT[rname]:
+        bestMatch = contig.bestMatch
+        qsize = qFAR.get(bestMatch.qname)
+
+        dotplot = image.set(bestMatch.qname, qsize)
+        dotplot.set_position(bestMatch.strand, bestMatch.intercept)
+        dotplot.set_border(1, qsize, bestMatch.rsPos, bestMatch.rePos)
+
+        for _strand, sub_DICT in contig.block_DICT[rname].items():
+            for _intercept, block_LIST in sub_DICT.items():
+                for block in block_LIST:
+                    dotplot.add_block(block)
+
+    fout = open(f'dotplot_S/{rname}.html', 'w')
     fout.write(str(image.html))
     fout.close()
 
-for rname, image in imageLow_DICT.items():
-    fout = open('dotplot_S/{0}_Low.html'.format(rname), 'w')
+    image = IMAGE(rname, rsize, posRate_S)
+    for contig in contig_DICT[rname]:
+        bestMatch = contig.bestMatch
+        qsize = qFAR.get(bestMatch.qname)
+
+        dotplot = image.set(bestMatch.qname, qsize)
+        dotplot.set_position(bestMatch.strand, bestMatch.intercept)
+        dotplot.set_border(1, qsize, bestMatch.rsPos, bestMatch.rePos)
+
+        for _strand, sub_DICT in contig.block_DICT[rname].items():
+            for _intercept, block_LIST in sub_DICT.items():
+                for blockIDX, block in enumerate(block_LIST):
+                    if blockIDX%10 == 0:
+                        dotplot.add_block(block)
+
+    fout = open(f'dotplot_S/{rname}_Low.html', 'w')
     fout.write(str(image.html))
     fout.close()
+
+    image = IMAGE(rname, rsize, posRate_L)
+    for contig in contig_DICT[rname]:
+        bestMatch = contig.bestMatch
+        qsize = qFAR.get(bestMatch.qname)
+
+        dotplot = image.set(bestMatch.qname, qsize)
+        dotplot.set_position(bestMatch.strand, bestMatch.intercept)
+        dotplot.set_border(1, qsize, bestMatch.rsPos, bestMatch.rePos)
+
+        for _strand, sub_DICT in contig.block_DICT[rname].items():
+            for _intercept, block_LIST in sub_DICT.items():
+                for block in block_LIST:
+                    dotplot.add_block(block)
+
+    fout = open(f'dotplot_L/{rname}.html', 'w')
+    fout.write(str(image.html))
+    fout.close()
+
+    image = IMAGE(rname, rsize, posRate_L)
+    for contig in contig_DICT[rname]:
+        bestMatch = contig.bestMatch
+        qsize = qFAR.get(bestMatch.qname)
+
+        dotplot = image.set(bestMatch.qname, qsize)
+        dotplot.set_position(bestMatch.strand, bestMatch.intercept)
+        dotplot.set_border(1, qsize, bestMatch.rsPos, bestMatch.rePos)
+
+        for _strand, sub_DICT in contig.block_DICT[rname].items():
+            for _intercept, block_LIST in sub_DICT.items():
+                for blockIDX, block in enumerate(block_LIST):
+                    if blockIDX%10 == 0:
+                        dotplot.add_block(block)
+
+    fout = open(f'dotplot_L/{rname}_Low.html', 'w')
+    fout.write(str(image.html))
+    fout.close()
+
+with Pool(processes=batchN) as pool:
+    pool.map(draw_image, contig_DICT.keys())
