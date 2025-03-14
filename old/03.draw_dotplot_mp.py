@@ -17,13 +17,6 @@ def chi_squared_test(variance, number):
     critical_value = chi2.ppf(1 - alpha, df)
 
     return chi_squared_stat < critical_value
-
-def median_with_outliers(array):
-    median = np.median(array)
-    variance = np.var(array)
-
-    return median, variance
-
 def median_without_outliers(array):
     sorted_array = np.sort(array)
     # 사분위수 계산
@@ -68,6 +61,22 @@ class FAIDX_READER:
         return self.seqLen_DICT[seqName]
 
 @dataclass
+class BLOCK:
+    rname: str
+    strand: str
+    qpos: int
+    rpos: int
+    isIn: bool = field(default=False)
+    isRepeat: bool = field(default=False)
+    intercept: int = field(init=False)
+
+    def __post_init__(self):
+        if self.strand == '+':
+            self.intercept = -self.qpos + self.rpos
+        elif self.strand == '-':
+            self.intercept = self.qpos + self.rpos
+
+@dataclass
 class Match:
     qname: str
     rname: str
@@ -85,73 +94,67 @@ class Match:
 class CONTIG:
     def __init__(self, qname):
         self.qname = qname
-
         self.block_DICT = {}
-        #self.blockN_DICT = {}
-        #self.block_LIST = []
+        self.blockN_DICT = {}
+        self.block_LIST = []
 
         self.bestMatch = None
-
-    def destory(self):
-        del self.block_DICT
     
-    def add(self, rname, strand, qpos, rpos):
-        if strand == 0:
-            intercept = -qpos + rpos
-        elif strand == 1:
-            intercept = qpos + rpos
-
-        if not rname in self.block_DICT:
-            self.block_DICT[rname] = {0:{}, 1:{}}
+    def add(self, block):
+        self.block_LIST += [block]
+        if not block.rname in self.block_DICT:
+            self.block_DICT[block.rname] = {'+':{}, '-':{}}
+            self.blockN_DICT[block.rname] = 0
         
-        if not intercept in self.block_DICT[rname][strand]:
-            self.block_DICT[rname][strand][intercept]  = [[qpos, rpos, False]]
+        self.blockN_DICT[block.rname] += 1
+        
+        if not block.intercept in self.block_DICT[block.rname][block.strand]:
+            self.block_DICT[block.rname][block.strand][block.intercept]  = [block]
         else:
-            self.block_DICT[rname][strand][intercept] += [[qpos, rpos, False]]
+            self.block_DICT[block.rname][block.strand][block.intercept] += [block]
 
     def removeRepeat(self, maxRepeat):
         _qblock_DICT = {}
-        _rblock_DICT = {}
         for rname, sub1_DICT in self.block_DICT.items():
             _qblock_DICT[rname] = {}
-            _rblock_DICT[rname] = {}
             for strand, sub2_DICT in sub1_DICT.items():
                 for intercept, block_LIST in sub2_DICT.items():
                     for block in block_LIST:
-                        #_qblock_DICT
-                        if not block[0] in _qblock_DICT[rname]:
-                            _qblock_DICT[rname][block[0]]  = [block]
+                        if not block.qpos in _qblock_DICT[rname]:
+                            _qblock_DICT[rname][block.qpos]  = [block]
                         else:
-                            _qblock_DICT[rname][block[0]] += [block]
-
-                        #_rblock_DICT
-                        if not block[1] in _rblock_DICT[rname]:
-                            _rblock_DICT[rname][block[1]]  = [block]
-                        else:
-                            _rblock_DICT[rname][block[1]] += [block]
+                            _qblock_DICT[rname][block.qpos] += [block]
 
         for rname, sub1_DICT in _qblock_DICT.items():
             for qpos, block_LIST in sub1_DICT.items():
                 if len(block_LIST) < maxRepeat: continue
                 for block in block_LIST:
-                    block[2] = True
+                    block.isRepeat = True
+
+        _rblock_DICT = {}
+        for rname, sub1_DICT in self.block_DICT.items():
+            _rblock_DICT[rname] = {}
+            for strand, sub2_DICT in sub1_DICT.items():
+                for intercept, block_LIST in sub2_DICT.items():
+                    for block in block_LIST:
+                        if not block.rpos in _rblock_DICT[rname]:
+                            _rblock_DICT[rname][block.rpos]  = [block]
+                        else:
+                            _rblock_DICT[rname][block.rpos] += [block]
 
         for rname, sub1_DICT in _rblock_DICT.items():
             for rpos, block_LIST in sub1_DICT.items():
                 if len(block_LIST) < maxRepeat: continue
                 for block in block_LIST:
-                    block[2] = True
-
-        del _qblock_DICT
-        del _rblock_DICT
+                    block.isRepeat = True
 
         _contig = CONTIG(self.qname)
         for rname, sub1_DICT in self.block_DICT.items():
             for strand, sub2_DICT in sub1_DICT.items():
                 for intercept, block_LIST in sub2_DICT.items():
                     for block in block_LIST:
-                        if block[2] == True: continue
-                        _contig.add(rname, strand, block[0], block[1])
+                        if block.isRepeat == True: continue
+                        _contig.add(block)
 
         return _contig
     
@@ -160,26 +163,22 @@ class CONTIG:
         for rname, sub1_DICT in self.block_DICT.items():
             for strand, sub2_DICT in sub1_DICT.items():
                 for intercept, block_LIST in sub2_DICT.items():
-                    if len(block_LIST) < minBlockN: continue
+                    blockN = len(block_LIST)
+                    if blockN < minBlockN: continue
+
                     for block in block_LIST:
-                        _contig.add(rname, strand, block[0], block[1])
+                        _contig.add(block)
 
         return _contig
 
     def calc_best(self, coverage):
         bestMatch = None
 
-        rname_LIST = list(self.block_DICT.keys())
-        for rname in rname_LIST:
+        for rname in self.block_DICT.keys():
             match = self.calc(rname, 1)
 
             if bestMatch == None or bestMatch.number < match.number:
                 bestMatch = match
-
-        for rname in rname_LIST:
-            if bestMatch.rname == rname: continue
-
-            del self.block_DICT[rname]
 
         self.bestMatch = bestMatch
         return self.bestMatch
@@ -206,37 +205,37 @@ class CONTIG:
             blockN = len(block_LIST)
             subN += blockN
 
-            if strand == 0:
+            if strand == '+':
                 interceptP_LIST += [intercept]* blockN
 
-            if strand == 1:
+            if strand == '-':
                 interceptM_LIST += [intercept]* blockN
 
             if subN/totalN > coverage: break
         
         #print(rname, len(interceptP_LIST), len(interceptM_LIST))
         if len(interceptP_LIST) > len(interceptM_LIST):
-            STRAND = 0
-            meanIntercept, variance = median_with_outliers(interceptP_LIST)
+            STRAND = '+'
+            meanIntercept, variance = median_without_outliers(interceptP_LIST)
             std_deviation = variance ** 0.5
         else:
-            STRAND = 1
-            meanIntercept, variance = median_with_outliers(interceptM_LIST)
+            STRAND = '-'
+            meanIntercept, variance = median_without_outliers(interceptM_LIST)
             std_deviation = variance ** 0.5
 
         
         #calculate boundery
         for [strand, intercept, block_LIST] in target_LIST:
             if STRAND != strand: continue
-            if abs(intercept - meanIntercept) >  std_deviation * 3: continue
+            if abs(intercept - meanIntercept) >  max(std_deviation * 3, 1000): continue
             for block in block_LIST:
-                block[2] = True
+                block.isIn = True
 
-                qsPos = min(qsPos, block[0])
-                qePos = max(qePos, block[0])
+                qsPos = min(qsPos, block.qpos)
+                qePos = max(qePos, block.qpos)
 
-                rsPos = min(rsPos, block[1])
-                rePos = max(rePos, block[1])
+                rsPos = min(rsPos, block.rpos)
+                rePos = max(rePos, block.rpos)
 
         number = len(interceptP_LIST) + len(interceptM_LIST)
 
@@ -272,11 +271,11 @@ class Engine:
                     if rname == '*': continue
 
                     rpos = int(rpos)
-                    strand = 1 if int(flag)&16 == 16 else 0
+                    strand = '-' if int(flag)&16 == 16 else '+'
 
-                    #block = BLOCK(strand, qpos, rpos)
+                    block = BLOCK(rname, strand, qpos, rpos)
 
-                    contig.add(rname, strand, qpos, rpos)
+                    contig.add(block)
             
             yield contig
 
@@ -338,16 +337,13 @@ class DOTPLOT:
         self.text.add(self.seqName)
         self.text.attr('font-size', 10)
         
-        self.strand = 'N'
+        self.strand = '+'
 
     def cal_pos(self, pos):
         return self.posRate * pos
     
     def set_position(self, strand, intercept):
-        if strand == 0:
-            self.strand = '+'
-        else:
-            self.strand = '-'
+        self.strand = strand
         
         x = self.cal_pos(intercept)
         y = 0
@@ -388,14 +384,14 @@ class DOTPLOT:
 
         r = 0.05
 
-        cx = self.cal_pos(block[0]) - r/2
-        cy = self.cal_pos(block[1]) - r/2
+        cx = self.cal_pos(block.qpos) - r/2
+        cy = self.cal_pos(block.rpos) - r/2
  
         dot.attr('cx', "{0:.4f}".format(cx))
         dot.attr('cy', "{0:.4f}".format(cy))
         dot.attr('r', r)
 
-        if block[2] == True:
+        if block.isIn == True:
             dot.attr('fill', 'red')
         else:
             dot.attr('fill', 'gray')
@@ -417,11 +413,9 @@ def make_contig(batchIDX):
     engine = Engine(prefix, batchN, batchIDX)
     for contig in engine.run():
         rContig = contig.removeRepeat(5)
-        contig.destory()
         del contig
 
         fContig = rContig.extract(10)
-        rContig.destory()
         del rContig
 
         fContig.calc_best(1)
@@ -443,7 +437,7 @@ for contig_LIST in result_LIST:
 
         context  = [contig.bestMatch.qname]
         context += [contig.bestMatch.rname]
-        context += ['+' if contig.bestMatch.strand == 0 else '-']
+        context += [contig.bestMatch.strand]
         context += [contig.bestMatch.intercept]
         context += [contig.bestMatch.number]
         context += [contig.bestMatch.variance]
@@ -485,7 +479,6 @@ def draw_image(rname):
     fout = open(f'dotplot_S/{rname}.html', 'w')
     fout.write(str(image.html))
     fout.close()
-    del image
 
     image = IMAGE(rname, rsize, posRate_S)
     for contig in contig_DICT[rname]:
@@ -505,7 +498,6 @@ def draw_image(rname):
     fout = open(f'dotplot_S/{rname}_Low.html', 'w')
     fout.write(str(image.html))
     fout.close()
-    del image
 
     image = IMAGE(rname, rsize, posRate_L)
     for contig in contig_DICT[rname]:
@@ -524,7 +516,6 @@ def draw_image(rname):
     fout = open(f'dotplot_L/{rname}.html', 'w')
     fout.write(str(image.html))
     fout.close()
-    del image
 
     image = IMAGE(rname, rsize, posRate_L)
     for contig in contig_DICT[rname]:
@@ -544,7 +535,6 @@ def draw_image(rname):
     fout = open(f'dotplot_L/{rname}_Low.html', 'w')
     fout.write(str(image.html))
     fout.close()
-    del image
 
 with Pool(processes=batchN) as pool:
     pool.map(draw_image, contig_DICT.keys())
