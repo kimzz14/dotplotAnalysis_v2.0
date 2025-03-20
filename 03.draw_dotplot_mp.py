@@ -402,6 +402,20 @@ class DOTPLOT:
 
 
 ###########################################################################################
+from optparse import OptionParser
+import sys, gzip
+#option parser
+parser = OptionParser(usage="""Run annotation.py \n Usage: %prog [options]""")
+parser.add_option("-n","--name",action = 'store',type = 'string',dest = 'target',help = "")
+parser.add_option("-t","--threadN",action = 'store',type = 'int',dest = 'threadN',help = "")
+(opt, args) = parser.parse_args()
+if opt.threadN == None:
+    print('Basic usage')
+    print('')
+    print('     python 03.draw_dotplot_mp.py -t 24 -n Chr01 (optional)')
+    print('')
+    sys.exit()
+
 prefix = 'query_100'
 qFAR = FAIDX_READER('query.fa.fai')
 rFAR = FAIDX_READER('ref/ref.fa.fai')
@@ -409,7 +423,8 @@ rFAR = FAIDX_READER('ref/ref.fa.fai')
 image_DICT = {}
 imageLow_DICT = {}
 
-batchN = 20
+batchN = opt.threadN
+targetName = opt.target
 ###########################################################################################
 def make_contig(batchIDX):
     result = []
@@ -425,6 +440,11 @@ def make_contig(batchIDX):
         del rContig
 
         fContig.calc_best(1)
+
+        if targetName != None and fContig.bestMatch.rname != targetName:
+            fContig.destory()
+            del fContig
+            continue
 
         result += [fContig]
     engine.close()
