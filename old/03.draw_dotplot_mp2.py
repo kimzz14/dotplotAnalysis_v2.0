@@ -5,9 +5,6 @@ from itertools import groupby
 from scipy.stats import chi2
 import math
 import numpy as np
-import pickle
-import uuid
-import os
 ###########################################################################################
 def chi_squared_test(variance, number):
     sigma0_squared = 200000 * 200000
@@ -409,12 +406,13 @@ from optparse import OptionParser
 import sys, gzip
 #option parser
 parser = OptionParser(usage="""Run annotation.py \n Usage: %prog [options]""")
+parser.add_option("-n","--name",action = 'store',type = 'string',dest = 'target',help = "")
 parser.add_option("-t","--threadN",action = 'store',type = 'int',dest = 'threadN',help = "")
 (opt, args) = parser.parse_args()
 if opt.threadN == None:
     print('Basic usage')
     print('')
-    print('     python 03.draw_dotplot_mp.py -t 24')
+    print('     python 03.draw_dotplot_mp.py -t 24 -n Chr01 (optional)')
     print('')
     sys.exit()
 
@@ -422,21 +420,14 @@ prefix = 'query_100'
 qFAR = FAIDX_READER('query.fa.fai')
 rFAR = FAIDX_READER('ref/ref.fa.fai')
 
-
-unique_id = str(uuid.uuid4())
-#unique_id = '3f580251-90ad-4172-ac87-38edefb8643d'
-
-tmpDir = f'tmp/{unique_id}'
-if not os.path.exists(tmpDir):
-    os.makedirs(tmpDir)
-
 image_DICT = {}
 imageLow_DICT = {}
 
 batchN = opt.threadN
+targetName = opt.target
 ###########################################################################################
 def make_contig(batchIDX):
-    saveN = 0
+    result = []
 
     engine = Engine(prefix, batchN, batchIDX)
     for contig in engine.run():
@@ -448,42 +439,28 @@ def make_contig(batchIDX):
         rContig.destory()
         del rContig
 
-        if fContig.calc_best(1) != None:
-            saveN += 1
+        fContig.calc_best(1)
 
-            outDir = f'{tmpDir}/{fContig.bestMatch.rname}'
-            if not os.path.exists(outDir):
-                os.makedirs(outDir)
+        if targetName != None and fContig.bestMatch.rname != targetName:
+            fContig.destory()
+            del fContig
+            continue
 
-            with open(f'{outDir}/{fContig.qname}.pkl', 'wb') as f:
-                pickle.dump(fContig, f)
-        fContig.destory()
-        del fContig
-
+        result += [fContig]
     engine.close()
 
-    return saveN
+    return result
 
-print('[read file] start', flush=True)
-#with Pool(processes=batchN) as pool:
-#    result_LIST = pool.map(make_contig, range(batchN))
-
-print('[read file] done', flush=True)
+with Pool(processes=batchN) as pool:
+    result_LIST = pool.map(make_contig, range(batchN))
 
 ###########################################################################################
-
-
 fout = open(prefix + '.contig', 'w')
-contig = None
-for rname in rFAR.seqName_LIST:
-    rsize = rFAR.get(rname)
-    for qname in qFAR.seqName_LIST:
-        filepath = f'{tmpDir}/{rname}/{qname}.pkl'
-        if not os.path.exists(filepath): continue
+contig_DICT = {}
+for contig_LIST in result_LIST:
+    for contig in contig_LIST:
+        if contig.bestMatch == None: continue
 
-        with open(filepath, 'rb') as f:
-            contig = pickle.load(f)
-        
         context  = [contig.bestMatch.qname]
         context += [contig.bestMatch.rname]
         context += ['+' if contig.bestMatch.strand == 0 else '-']
@@ -497,23 +474,22 @@ for rname in rFAR.seqName_LIST:
         context += [contig.bestMatch.rePos]
         context += [contig.bestMatch.coverage]
         fout.write('\t'.join(map(str,context)) + '\n')
+
+        rname = contig.bestMatch.rname
+        if not rname in contig_DICT: contig_DICT[rname] = []
+
+        contig_DICT[rname] += [contig]
+
 fout.close()
-
-print('[make contig] done', flush=True)
-
-
-def draw_image(param):
-    posRate = param['posRate']
-    rname = param['rname']
+###########################################################################################
+def draw_image(rname):
     rsize = rFAR.get(rname)
-    image = IMAGE(rname, rsize, posRate)
-    for qname in qFAR.seqName_LIST:
-        filepath = f'{tmpDir}/{rname}/{qname}.pkl'
-        if not os.path.exists(filepath): continue
 
-        with open(filepath, 'rb') as f:
-            contig = pickle.load(f)
+    posRate_S = 0.00001
+    posRate_L = 0.0003
 
+    image = IMAGE(rname, rsize, posRate_S)
+    for contig in contig_DICT[rname]:
         bestMatch = contig.bestMatch
         qsize = qFAR.get(bestMatch.qname)
 
@@ -521,44 +497,74 @@ def draw_image(param):
         dotplot.set_position(bestMatch.strand, bestMatch.intercept)
         dotplot.set_border(1, qsize, bestMatch.rsPos, bestMatch.rePos)
 
-        if param['resolution'] == 'low':
-            for _strand, sub_DICT in contig.block_DICT[rname].items():
-                for _intercept, block_LIST in sub_DICT.items():
-                    for blockIDX, block in enumerate(block_LIST):
-                        if blockIDX%10 == 0:
-                            dotplot.add_block(block)
-        else:
-            for _strand, sub_DICT in contig.block_DICT[rname].items():
-                for _intercept, block_LIST in sub_DICT.items():
-                    for blockIDX, block in enumerate(block_LIST):
-                        dotplot.add_block(block)
-    if param['resolution'] == 'low':
-        fout = open(f'{param['outDir']}/{rname}_low.html', 'w')
-    else:
-        fout = open(f'{param['outDir']}/{rname}.html', 'w')
+        for _strand, sub_DICT in contig.block_DICT[rname].items():
+            for _intercept, block_LIST in sub_DICT.items():
+                for block in block_LIST:
+                    dotplot.add_block(block)
+
+    fout = open(f'dotplot_S/{rname}.html', 'w')
     fout.write(str(image.html))
     fout.close()
+    del image
 
-posRate_S = 0.00001
-posRate_L = 0.0003
+    image = IMAGE(rname, rsize, posRate_S)
+    for contig in contig_DICT[rname]:
+        bestMatch = contig.bestMatch
+        qsize = qFAR.get(bestMatch.qname)
 
-param_LIST = []
-for rname in rFAR.seqName_LIST:
-    param = {'rname': rname, 'posRate': posRate_S, 'resolution': 'low',  'outDir': 'dotplot_S'}
-    param_LIST += [param]
+        dotplot = image.set(bestMatch.qname, qsize)
+        dotplot.set_position(bestMatch.strand, bestMatch.intercept)
+        dotplot.set_border(1, qsize, bestMatch.rsPos, bestMatch.rePos)
 
-    param = {'rname': rname, 'posRate': posRate_S, 'resolution': 'high', 'outDir': 'dotplot_S'}
-    param_LIST += [param]
+        for _strand, sub_DICT in contig.block_DICT[rname].items():
+            for _intercept, block_LIST in sub_DICT.items():
+                for blockIDX, block in enumerate(block_LIST):
+                    if blockIDX%10 == 0:
+                        dotplot.add_block(block)
 
-    param = {'rname': rname, 'posRate': posRate_L, 'resolution': 'low',  'outDir': 'dotplot_L'}
-    param_LIST += [param]
+    fout = open(f'dotplot_S/{rname}_Low.html', 'w')
+    fout.write(str(image.html))
+    fout.close()
+    del image
 
-    param = {'rname': rname, 'posRate': posRate_L, 'resolution': 'high', 'outDir': 'dotplot_L'}
-    param_LIST += [param]
+    image = IMAGE(rname, rsize, posRate_L)
+    for contig in contig_DICT[rname]:
+        bestMatch = contig.bestMatch
+        qsize = qFAR.get(bestMatch.qname)
 
-print('[draw image] start', flush=True)
+        dotplot = image.set(bestMatch.qname, qsize)
+        dotplot.set_position(bestMatch.strand, bestMatch.intercept)
+        dotplot.set_border(1, qsize, bestMatch.rsPos, bestMatch.rePos)
+
+        for _strand, sub_DICT in contig.block_DICT[rname].items():
+            for _intercept, block_LIST in sub_DICT.items():
+                for block in block_LIST:
+                    dotplot.add_block(block)
+
+    fout = open(f'dotplot_L/{rname}.html', 'w')
+    fout.write(str(image.html))
+    fout.close()
+    del image
+
+    image = IMAGE(rname, rsize, posRate_L)
+    for contig in contig_DICT[rname]:
+        bestMatch = contig.bestMatch
+        qsize = qFAR.get(bestMatch.qname)
+
+        dotplot = image.set(bestMatch.qname, qsize)
+        dotplot.set_position(bestMatch.strand, bestMatch.intercept)
+        dotplot.set_border(1, qsize, bestMatch.rsPos, bestMatch.rePos)
+
+        for _strand, sub_DICT in contig.block_DICT[rname].items():
+            for _intercept, block_LIST in sub_DICT.items():
+                for blockIDX, block in enumerate(block_LIST):
+                    if blockIDX%10 == 0:
+                        dotplot.add_block(block)
+
+    fout = open(f'dotplot_L/{rname}_Low.html', 'w')
+    fout.write(str(image.html))
+    fout.close()
+    del image
 
 with Pool(processes=batchN) as pool:
-    pool.map(draw_image, param_LIST)
-
-print('[draw image] done', flush=True)
+    pool.map(draw_image, contig_DICT.keys())
