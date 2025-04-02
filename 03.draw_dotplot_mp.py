@@ -9,6 +9,20 @@ import pickle
 import uuid
 import os
 ###########################################################################################
+import random
+import colorsys
+
+def hsl_to_rgb255(h, s, l):
+    r, g, b = colorsys.hls_to_rgb(h, l, s)  # HLS 순서 주의!
+    return int(r * 255), int(g * 255), int(b * 255)
+
+def generate_dark_vivid_color():
+    h = random.random()                # 다양한 색상
+    s = random.uniform(0.8, 1.0)       # 채도 높게
+    l = random.uniform(0.2, 0.4)       # 밝기 낮게
+    rgb = hsl_to_rgb255(h, s, l)
+    return rgb
+
 def chi_squared_test(variance, number):
     sigma0_squared = 200000 * 200000
 
@@ -231,7 +245,7 @@ class CONTIG:
         #calculate boundery
         for [strand, intercept, block_LIST] in target_LIST:
             if STRAND != strand: continue
-            if abs(intercept - meanIntercept) >  std_deviation * 3: continue
+            if abs(intercept - meanIntercept) >  max(std_deviation * 3, 1000): continue
             for block in block_LIST:
                 block[2] = True
 
@@ -398,11 +412,13 @@ class DOTPLOT:
         dot.attr('cy', "{0:.4f}".format(cy))
         dot.attr('r', r)
 
-        if block[2] == True:
-            dot.attr('fill', 'red')
-        else:
-            dot.attr('fill', 'gray')
+        rgb = generate_dark_vivid_color()
+        dot.attr('fill', f'rgb({rgb[0]},{rgb[1]},{rgb[2]})')
 
+        #if block[2] == True:
+        #    dot.attr('fill', 'red')
+        #else:
+        #    dot.attr('fill', 'gray')
 
 ###########################################################################################
 from optparse import OptionParser
@@ -423,8 +439,8 @@ qFAR = FAIDX_READER('query.fa.fai')
 rFAR = FAIDX_READER('ref/ref.fa.fai')
 
 
-unique_id = str(uuid.uuid4())
-#unique_id = '3f580251-90ad-4172-ac87-38edefb8643d'
+#unique_id = str(uuid.uuid4())
+unique_id = '3f580251-90ad-4172-ac87-38edefb8643d'
 
 tmpDir = f'tmp/{unique_id}'
 if not os.path.exists(tmpDir):
@@ -465,8 +481,8 @@ def make_contig(batchIDX):
     return saveN
 
 print('[read file] start', flush=True)
-#with Pool(processes=batchN) as pool:
-#    result_LIST = pool.map(make_contig, range(batchN))
+with Pool(processes=batchN) as pool:
+    result_LIST = pool.map(make_contig, range(batchN))
 
 print('[read file] done', flush=True)
 
@@ -539,8 +555,8 @@ def draw_image(param):
     fout.write(str(image.html))
     fout.close()
 
-posRate_S = 0.00001
-posRate_L = 0.0003
+posRate_S = 0.000001
+posRate_L = 0.00003
 
 param_LIST = []
 for rname in rFAR.seqName_LIST:
