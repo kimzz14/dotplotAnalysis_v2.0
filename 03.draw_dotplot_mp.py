@@ -443,8 +443,7 @@ rFAR = FAIDX_READER('ref/ref.fa.fai')
 unique_id = '3f580251-90ad-4172-ac87-38edefb8643d'
 
 tmpDir = f'tmp/{unique_id}'
-if not os.path.exists(tmpDir):
-    os.makedirs(tmpDir)
+
 
 image_DICT = {}
 imageLow_DICT = {}
@@ -480,11 +479,16 @@ def make_contig(batchIDX):
 
     return saveN
 
-print('[read file] start', flush=True)
-with Pool(processes=batchN) as pool:
-    result_LIST = pool.map(make_contig, range(batchN))
+if not os.path.exists(tmpDir):
+    os.makedirs(tmpDir)
+    print('[read file] start', flush=True)
+    with Pool(processes=batchN) as pool:
+        result_LIST = pool.map(make_contig, range(batchN))
+    print('[read file] done', flush=True)
+else:
+    print('[read file] skip', flush=True)
 
-print('[read file] done', flush=True)
+
 
 ###########################################################################################
 
@@ -519,6 +523,7 @@ print('[make contig] done', flush=True)
 
 
 def draw_image(param):
+    outDir = param['outDir']
     posRate = param['posRate']
     rname = param['rname']
     rsize = rFAR.get(rname)
@@ -549,9 +554,9 @@ def draw_image(param):
                     for blockIDX, block in enumerate(block_LIST):
                         dotplot.add_block(block)
     if param['resolution'] == 'low':
-        fout = open(f'{param['outDir']}/{rname}_low.html', 'w')
+        fout = open(f'{outDir}/{rname}_low.html', 'w')
     else:
-        fout = open(f'{param['outDir']}/{rname}.html', 'w')
+        fout = open(f'{outDir}/{rname}.html', 'w')
     fout.write(str(image.html))
     fout.close()
 
