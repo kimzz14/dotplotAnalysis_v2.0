@@ -406,7 +406,7 @@ class DOTPLOT:
     def add_block(self, block):
         dot = element('circle ', self.group)
 
-        r = 0.05
+        r = 0.1
 
         cx = self.cal_pos(block[0]) - r/2
         cy = self.cal_pos(block[1]) - r/2
