@@ -350,6 +350,9 @@ class DOTPLOT:
         self.seqLen = seqLen
         self.posRate = posRate
 
+        rgb = generate_dark_vivid_color()
+        self.color = f'rgb({rgb[0]},{rgb[1]},{rgb[2]})'
+
         self.group = element('g', container)
         self.text = element('text', self.group)
         self.text.add(self.seqName)
@@ -412,8 +415,7 @@ class DOTPLOT:
         dot.attr('cy', "{0:.4f}".format(cy))
         dot.attr('r', r)
 
-        rgb = generate_dark_vivid_color()
-        dot.attr('fill', f'rgb({rgb[0]},{rgb[1]},{rgb[2]})')
+        dot.attr('fill', self.color)
 
         #if block[2] == True:
         #    dot.attr('fill', 'red')
